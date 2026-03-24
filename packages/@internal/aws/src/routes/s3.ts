@@ -144,6 +144,7 @@ ${prefixesXml}
   });
 
   // PutObject - PUT /s3/:bucket/:key{.+}
+  // Also handles CopyObject when x-amz-copy-source header is present
   app.put("/s3/:bucket/:key{.+}", async (c) => {
     const bucketName = c.req.param("bucket");
     const key = c.req.param("key");
@@ -151,6 +152,62 @@ ${prefixesXml}
     const bucket = aws().s3Buckets.findOneBy("bucket_name", bucketName);
     if (!bucket) {
       return awsErrorXml(c, "NoSuchBucket", "The specified bucket does not exist.", 404);
+    }
+
+    // Handle CopyObject via x-amz-copy-source header
+    const copySource = c.req.header("x-amz-copy-source");
+    if (copySource) {
+      // copySource format: /bucket/key or bucket/key
+      const normalized = copySource.startsWith("/") ? copySource.slice(1) : copySource;
+      const slashIndex = normalized.indexOf("/");
+      if (slashIndex < 0) {
+        return awsErrorXml(c, "InvalidArgument", "Invalid copy source.", 400);
+      }
+      const srcBucket = normalized.slice(0, slashIndex);
+      const srcKey = normalized.slice(slashIndex + 1);
+
+      const srcObj = aws()
+        .s3Objects.findBy("bucket_name", srcBucket)
+        .find((o) => o.key === srcKey);
+      if (!srcObj) {
+        return awsErrorXml(c, "NoSuchKey", "The specified source key does not exist.", 404);
+      }
+
+      const etag = srcObj.etag;
+      const now = new Date().toISOString();
+
+      const existing = aws()
+        .s3Objects.findBy("bucket_name", bucketName)
+        .find((o) => o.key === key);
+
+      if (existing) {
+        aws().s3Objects.update(existing.id, {
+          body: srcObj.body,
+          content_type: srcObj.content_type,
+          content_length: srcObj.content_length,
+          etag,
+          last_modified: now,
+          metadata: { ...srcObj.metadata },
+        });
+      } else {
+        aws().s3Objects.insert({
+          bucket_name: bucketName,
+          key,
+          body: srcObj.body,
+          content_type: srcObj.content_type,
+          content_length: srcObj.content_length,
+          etag,
+          last_modified: now,
+          metadata: { ...srcObj.metadata },
+        });
+      }
+
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<CopyObjectResult>
+  <ETag>"${etag}"</ETag>
+  <LastModified>${now}</LastModified>
+</CopyObjectResult>`;
+      return awsXmlResponse(c, xml);
     }
 
     const body = await c.req.text();
@@ -263,10 +320,5 @@ ${prefixesXml}
     return c.body(null, 204);
   });
 
-  // CopyObject - PUT /s3/:bucket/:key{.+} with x-amz-copy-source
-  app.on("COPY", "/s3/:bucket/:key{.+}", (c) => {
-    // We handle copy in PUT via the x-amz-copy-source header instead
-    return awsErrorXml(c, "MethodNotAllowed", "The specified method is not allowed.", 405);
-  });
 }
 

@@ -205,6 +205,30 @@ describe("AWS plugin - S3 Objects", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("text/plain");
   });
+
+  it("copies an object with x-amz-copy-source", async () => {
+    await app.request(`${base}/s3/emulate-default/source.txt`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "text/plain" },
+      body: "copy me",
+    });
+
+    const copyRes = await app.request(`${base}/s3/emulate-default/dest.txt`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "x-amz-copy-source": "/emulate-default/source.txt" },
+    });
+    expect(copyRes.status).toBe(200);
+    const copyText = await copyRes.text();
+    expect(copyText).toContain("CopyObjectResult");
+
+    const getRes = await app.request(`${base}/s3/emulate-default/dest.txt`, {
+      method: "GET",
+      headers: authHeaders(),
+    });
+    expect(getRes.status).toBe(200);
+    const body = await getRes.text();
+    expect(body).toBe("copy me");
+  });
 });
 
 describe("AWS plugin - SQS", () => {
