@@ -119,6 +119,7 @@ async function exchangeCode(
     authServerId?: string;
     clientId?: string;
     clientSecret?: string;
+    includeClientSecret?: boolean;
     redirectUri?: string;
     codeVerifier?: string;
     useBasicAuth?: boolean;
@@ -130,9 +131,11 @@ async function exchangeCode(
     grant_type: "authorization_code",
     code,
     client_id: options.clientId ?? "okta-test-client",
-    client_secret: options.clientSecret ?? "okta-test-secret",
     redirect_uri: options.redirectUri ?? "http://localhost:3000/callback",
   });
+  if (options.includeClientSecret ?? true) {
+    body.set("client_secret", options.clientSecret ?? "okta-test-secret");
+  }
   if (options.codeVerifier) {
     body.set("code_verifier", options.codeVerifier);
   }
@@ -176,6 +179,11 @@ describe("Okta plugin integration", () => {
       expect(body.introspection_endpoint).toBe(`${base}/oauth2/v1/introspect`);
       expect(body.registration_endpoint).toBe(`${base}/oauth2/v1/clients`);
       expect(body.code_challenge_methods_supported).toEqual(["plain", "S256"]);
+      expect(body.token_endpoint_auth_methods_supported).toEqual([
+        "client_secret_post",
+        "client_secret_basic",
+        "none",
+      ]);
       expect(body.request_parameter_supported).toBe(false);
     });
 
@@ -354,6 +362,28 @@ describe("Okta plugin integration", () => {
       expect(tokenRes.status).toBe(200);
     });
 
+    it("supports public clients without client_secret", async () => {
+      const verifier = "public-pkce-verifier-12345";
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+
+      const { code } = await getAuthCode(app, store, {
+        clientId: "okta-test-app",
+        redirectUri: "http://localhost:3000/official-sdk/callback",
+        codeChallenge: challenge,
+        codeChallengeMethod: "S256",
+      });
+      const tokenRes = await exchangeCode(app, code, {
+        clientId: "okta-test-app",
+        redirectUri: "http://localhost:3000/official-sdk/callback",
+        codeVerifier: verifier,
+        includeClientSecret: false,
+      });
+      expect(tokenRes.status).toBe(200);
+      const body = await tokenRes.json() as Record<string, unknown>;
+      const claims = decodeJwt(body.id_token as string);
+      expect(claims.aud).toBe("okta-test-app");
+    });
+
     it("rejects incorrect S256 verifier", async () => {
       const verifier = "pkce-verifier-12345";
       const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -376,6 +406,27 @@ describe("Okta plugin integration", () => {
       });
       const tokenRes = await exchangeCode(app, code, { codeVerifier: verifier });
       expect(tokenRes.status).toBe(200);
+    });
+
+    it("still requires client_secret for confidential clients", async () => {
+      const verifier = "confidential-pkce-verifier-12345";
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+
+      const { code } = await getAuthCode(app, store, {
+        clientId: "okta-test-client",
+        redirectUri: "http://localhost:3000/callback",
+        codeChallenge: challenge,
+        codeChallengeMethod: "S256",
+      });
+      const tokenRes = await exchangeCode(app, code, {
+        clientId: "okta-test-client",
+        redirectUri: "http://localhost:3000/callback",
+        codeVerifier: verifier,
+        includeClientSecret: false,
+      });
+      expect(tokenRes.status).toBe(401);
+      const body = await tokenRes.json() as Record<string, unknown>;
+      expect(body.error).toBe("invalid_client");
     });
   });
 
@@ -541,6 +592,13 @@ describe("Okta plugin integration", () => {
 
     it("logout redirects when post_logout_redirect_uri is allowed", async () => {
       const uri = "http://localhost:3000/callback";
+      const res = await app.request(`${base}/oauth2/default/v1/logout?post_logout_redirect_uri=${encodeURIComponent(uri)}`);
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe(uri);
+    });
+
+    it("logout allows official SDK post_logout_redirect_uri for public clients", async () => {
+      const uri = "http://localhost:3000/official-sdk";
       const res = await app.request(`${base}/oauth2/default/v1/logout?post_logout_redirect_uri=${encodeURIComponent(uri)}`);
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toBe(uri);

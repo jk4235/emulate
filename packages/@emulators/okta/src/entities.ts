@@ -47,12 +47,12 @@ export interface OktaApp extends Entity {
 
 export interface OktaOAuthClient extends Entity {
   client_id: string;
-  client_secret: string;
+  client_secret?: string;
   name: string;
   redirect_uris: string[];
   response_types: string[];
   grant_types: string[];
-  token_endpoint_auth_method: "client_secret_post" | "client_secret_basic";
+  token_endpoint_auth_method: "client_secret_post" | "client_secret_basic" | "none";
   auth_server_id: string;
 }
 

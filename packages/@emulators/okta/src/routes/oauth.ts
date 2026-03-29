@@ -137,6 +137,7 @@ function resolveServer(
 function buildOidcConfiguration(baseUrl: string, server: ResolvedServer): Record<string, unknown> {
   const oauthBase = buildOAuthBasePath(server.authServerId);
   const oauthUrlBase = `${baseUrl}${oauthBase}`;
+  const tokenEndpointAuthMethods = ["client_secret_post", "client_secret_basic", "none"];
   return {
     issuer: server.issuer,
     authorization_endpoint: `${oauthUrlBase}/authorize`,
@@ -153,9 +154,9 @@ function buildOidcConfiguration(baseUrl: string, server: ResolvedServer): Record
     subject_types_supported: ["public"],
     id_token_signing_alg_values_supported: ["RS256"],
     scopes_supported: ["openid", "profile", "email", "offline_access", "groups"],
-    token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
-    revocation_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
-    introspection_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+    token_endpoint_auth_methods_supported: tokenEndpointAuthMethods,
+    revocation_endpoint_auth_methods_supported: tokenEndpointAuthMethods,
+    introspection_endpoint_auth_methods_supported: tokenEndpointAuthMethods,
     request_parameter_supported: false,
     request_uri_parameter_supported: false,
     claims_parameter_supported: false,
@@ -244,7 +245,11 @@ function validateClient(
     };
   }
 
-  if (!constantTimeSecretEqual(client.client_secret, clientSecret)) {
+  if (client.token_endpoint_auth_method === "none") {
+    return { client, response: null };
+  }
+
+  if (!constantTimeSecretEqual(client.client_secret ?? "", clientSecret)) {
     return {
       client: null,
       response: new Response(

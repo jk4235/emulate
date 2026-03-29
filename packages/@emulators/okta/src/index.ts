@@ -60,12 +60,12 @@ export interface OktaSeedConfig {
   }>;
   oauth_clients?: Array<{
     client_id: string;
-    client_secret: string;
+    client_secret?: string;
     name: string;
     redirect_uris: string[];
     response_types?: string[];
     grant_types?: string[];
-    token_endpoint_auth_method?: "client_secret_post" | "client_secret_basic";
+    token_endpoint_auth_method?: "client_secret_post" | "client_secret_basic" | "none";
     auth_server_id?: string;
   }>;
   authorization_servers?: Array<{
@@ -136,6 +136,22 @@ function seedDefaults(store: Store, _baseUrl: string): void {
       response_types: ["code"],
       grant_types: ["authorization_code", "refresh_token", "client_credentials"],
       token_endpoint_auth_method: "client_secret_post",
+      auth_server_id: DEFAULT_AUTH_SERVER_ID,
+    });
+  }
+
+  if (!okta.oauthClients.findOneBy("client_id", "okta-test-app")) {
+    okta.oauthClients.insert({
+      client_id: "okta-test-app",
+      client_secret: "",
+      name: "Sample Public PKCE Client",
+      redirect_uris: [
+        "http://localhost:3000/official-sdk/callback",
+        "http://localhost:3000/official-sdk",
+      ],
+      response_types: ["code"],
+      grant_types: ["authorization_code", "refresh_token"],
+      token_endpoint_auth_method: "none",
       auth_server_id: DEFAULT_AUTH_SERVER_ID,
     });
   }
@@ -220,14 +236,15 @@ export function seedFromConfig(store: Store, _baseUrl: string, config: OktaSeedC
     for (const client of config.oauth_clients) {
       const existing = okta.oauthClients.findOneBy("client_id", client.client_id);
       if (existing) continue;
+      const tokenEndpointAuthMethod = client.token_endpoint_auth_method ?? "client_secret_post";
       okta.oauthClients.insert({
         client_id: client.client_id,
-        client_secret: client.client_secret,
+        client_secret: client.client_secret ?? (tokenEndpointAuthMethod === "none" ? "" : ""),
         name: client.name,
         redirect_uris: client.redirect_uris,
         response_types: client.response_types ?? ["code"],
         grant_types: client.grant_types ?? ["authorization_code", "refresh_token", "client_credentials"],
-        token_endpoint_auth_method: client.token_endpoint_auth_method ?? "client_secret_post",
+        token_endpoint_auth_method: tokenEndpointAuthMethod,
         auth_server_id: client.auth_server_id ?? DEFAULT_AUTH_SERVER_ID,
       });
     }
