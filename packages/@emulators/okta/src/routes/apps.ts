@@ -1,4 +1,4 @@
-import type { RouteContext } from "@emulators/core";
+import { parsePagination, setLinkHeader, type RouteContext } from "@emulators/core";
 import { generateOktaId, normalizeAppStatus } from "../helpers.js";
 import {
   appResponse,
@@ -25,7 +25,14 @@ export function appRoutes({ app, store, baseUrl, tokenMap }: RouteContext): void
         `${entry.name} ${entry.label}`.toLowerCase().includes(q),
       );
     }
-    return c.json(apps.map((entry) => appResponse(baseUrl, entry)));
+    const { page, per_page } = parsePagination(c);
+    const total = apps.length;
+    const start = (page - 1) * per_page;
+    const paged = apps.slice(start, start + per_page);
+    setLinkHeader(c, total, page, per_page);
+    c.header("X-Total-Count", String(total));
+
+    return c.json(paged.map((entry) => appResponse(baseUrl, entry)));
   });
 
   app.post("/api/v1/apps", async (c) => {
@@ -53,7 +60,7 @@ export function appRoutes({ app, store, baseUrl, tokenMap }: RouteContext): void
       credentials,
     });
 
-    return c.json(appResponse(baseUrl, created), 200);
+    return c.json(appResponse(baseUrl, created), 201);
   });
 
   app.get("/api/v1/apps/:appId/users", (c) => {
@@ -88,8 +95,8 @@ export function appRoutes({ app, store, baseUrl, tokenMap }: RouteContext): void
     if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
 
     const existing = oktaStore.appAssignments
-      .all()
-      .find((assignment) => assignment.app_okta_id === appEntity.okta_id && assignment.user_okta_id === user.okta_id);
+      .findBy("app_okta_id", appEntity.okta_id)
+      .find((assignment) => assignment.user_okta_id === user.okta_id);
     if (!existing) {
       oktaStore.appAssignments.insert({
         app_okta_id: appEntity.okta_id,
@@ -110,8 +117,8 @@ export function appRoutes({ app, store, baseUrl, tokenMap }: RouteContext): void
     if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
 
     const existing = oktaStore.appAssignments
-      .all()
-      .find((assignment) => assignment.app_okta_id === appEntity.okta_id && assignment.user_okta_id === user.okta_id);
+      .findBy("app_okta_id", appEntity.okta_id)
+      .find((assignment) => assignment.user_okta_id === user.okta_id);
     if (existing) oktaStore.appAssignments.delete(existing.id);
     return new Response(null, { status: 204 });
   });

@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AuthUser, TokenMap, AppEnv } from "@emulators/core";
 import type {
   OktaApp,
@@ -35,12 +36,7 @@ export function oktaError(
   errorCauses: OktaErrorCause[] = [],
 ): Response {
   const body = createErrorBody(status, errorCode, errorSummary, errorCauses);
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
+  return c.json(body, status as ContentfulStatusCode);
 }
 
 export async function readJsonObject(c: Context<AppEnv>): Promise<Record<string, unknown>> {

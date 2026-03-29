@@ -174,6 +174,9 @@ describe("Okta plugin integration", () => {
       expect(body.token_endpoint).toBe(`${base}/oauth2/v1/token`);
       expect(body.jwks_uri).toBe(`${base}/oauth2/v1/keys`);
       expect(body.introspection_endpoint).toBe(`${base}/oauth2/v1/introspect`);
+      expect(body.registration_endpoint).toBe(`${base}/oauth2/v1/clients`);
+      expect(body.code_challenge_methods_supported).toEqual(["plain", "S256"]);
+      expect(body.request_parameter_supported).toBe(false);
     });
 
     it("returns default custom auth server discovery document", async () => {
@@ -527,6 +530,15 @@ describe("Okta plugin integration", () => {
       expect(tokenMap.has(accessToken)).toBe(false);
     });
 
+    it("revocation returns 200 for unknown token", async () => {
+      const res = await app.request(`${base}/oauth2/default/v1/revoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: "unknown-token" }).toString(),
+      });
+      expect(res.status).toBe(200);
+    });
+
     it("logout redirects when post_logout_redirect_uri is allowed", async () => {
       const uri = "http://localhost:3000/callback";
       const res = await app.request(`${base}/oauth2/default/v1/logout?post_logout_redirect_uri=${encodeURIComponent(uri)}`);
@@ -538,6 +550,12 @@ describe("Okta plugin integration", () => {
       const uri = "http://evil.local/callback";
       const res = await app.request(`${base}/oauth2/default/v1/logout?post_logout_redirect_uri=${encodeURIComponent(uri)}`);
       expect(res.status).toBe(400);
+    });
+
+    it("logout without redirect returns plain text", async () => {
+      const res = await app.request(`${base}/oauth2/default/v1/logout`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("Logged out");
     });
   });
 
@@ -562,9 +580,16 @@ describe("Okta plugin integration", () => {
           },
         }),
       });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(201);
       const body = await res.json() as Record<string, unknown>;
       expect(body.status).toBe("STAGED");
+    });
+
+    it("supports users/me endpoint", async () => {
+      const res = await app.request(`${base}/api/v1/users/me`, { headers: managementHeaders() });
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, unknown>;
+      expect((body.profile as Record<string, unknown>).login).toBeDefined();
     });
 
     it("gets user by id and by login", async () => {
@@ -654,6 +679,12 @@ describe("Okta plugin integration", () => {
         headers: managementHeaders(),
       });
       expect((await deactivate.json() as Record<string, unknown>).status).toBe("DEPROVISIONED");
+
+      const reactivate = await app.request(`${base}/api/v1/users/${userId}/lifecycle/reactivate`, {
+        method: "POST",
+        headers: managementHeaders(),
+      });
+      expect((await reactivate.json() as Record<string, unknown>).status).toBe("PROVISIONED");
     });
 
     it("returns groups for a user", async () => {
@@ -673,7 +704,44 @@ describe("Okta plugin integration", () => {
       expect(users.some((entry) => ((entry.profile as Record<string, unknown>).login as string).includes("alice"))).toBe(true);
     });
 
-    it("deletes user", async () => {
+    it("supports search and filter", async () => {
+      const bySearch = await app.request(`${base}/api/v1/users?search=alice`, { headers: managementHeaders() });
+      expect(bySearch.status).toBe(200);
+      const searchUsers = await bySearch.json() as Array<Record<string, unknown>>;
+      expect(searchUsers.some((entry) => ((entry.profile as Record<string, unknown>).login as string).includes("alice"))).toBe(true);
+
+      const byFilter = await app.request(`${base}/api/v1/users?filter=status eq ACTIVE`, { headers: managementHeaders() });
+      expect(byFilter.status).toBe(200);
+      const filterUsers = await byFilter.json() as Array<Record<string, unknown>>;
+      expect(filterUsers.length).toBeGreaterThan(0);
+      expect(filterUsers.every((entry) => entry.status === "ACTIVE")).toBe(true);
+    });
+
+    it("supports pagination with Link header", async () => {
+      for (let i = 0; i < 3; i += 1) {
+        await app.request(`${base}/api/v1/users`, {
+          method: "POST",
+          headers: managementHeaders(),
+          body: JSON.stringify({
+            profile: {
+              login: `page-${i}@example.com`,
+              email: `page-${i}@example.com`,
+              firstName: "Page",
+              lastName: String(i),
+            },
+          }),
+        });
+      }
+
+      const res = await app.request(`${base}/api/v1/users?per_page=2&page=1`, { headers: managementHeaders() });
+      expect(res.status).toBe(200);
+      const link = res.headers.get("Link");
+      expect(link).toBeTruthy();
+      const users = await res.json() as Array<Record<string, unknown>>;
+      expect(users.length).toBe(2);
+    });
+
+    it("deactivates first, then deletes on second request", async () => {
       const create = await app.request(`${base}/api/v1/users`, {
         method: "POST",
         headers: managementHeaders(),
@@ -681,13 +749,28 @@ describe("Okta plugin integration", () => {
           profile: { login: "delete@example.com", email: "delete@example.com", firstName: "Delete", lastName: "Me" },
         }),
       });
+      expect(create.status).toBe(201);
       const userId = (await create.json() as Record<string, unknown>).id as string;
 
-      const del = await app.request(`${base}/api/v1/users/${userId}`, {
+      const firstDelete = await app.request(`${base}/api/v1/users/${userId}`, {
         method: "DELETE",
         headers: managementHeaders(),
       });
-      expect(del.status).toBe(204);
+      expect(firstDelete.status).toBe(204);
+
+      const afterFirst = await app.request(`${base}/api/v1/users/${userId}`, { headers: managementHeaders() });
+      expect(afterFirst.status).toBe(200);
+      const bodyAfterFirst = await afterFirst.json() as Record<string, unknown>;
+      expect(bodyAfterFirst.status).toBe("DEPROVISIONED");
+
+      const secondDelete = await app.request(`${base}/api/v1/users/${userId}`, {
+        method: "DELETE",
+        headers: managementHeaders(),
+      });
+      expect(secondDelete.status).toBe(204);
+
+      const afterSecond = await app.request(`${base}/api/v1/users/${userId}`, { headers: managementHeaders() });
+      expect(afterSecond.status).toBe(404);
     });
   });
 
@@ -700,7 +783,7 @@ describe("Okta plugin integration", () => {
           profile: { name: "Team Blue", description: "Blue team" },
         }),
       });
-      expect(create.status).toBe(200);
+      expect(create.status).toBe(201);
       const created = await create.json() as Record<string, unknown>;
       const groupId = created.id as string;
 
@@ -734,6 +817,7 @@ describe("Okta plugin integration", () => {
         headers: managementHeaders(),
         body: JSON.stringify({ profile: { name: "Membership Group", description: "desc" } }),
       });
+      expect(createGroup.status).toBe(201);
       const groupId = (await createGroup.json() as Record<string, unknown>).id as string;
 
       const add = await app.request(`${base}/api/v1/groups/${groupId}/users/${userId}`, {
@@ -766,7 +850,7 @@ describe("Okta plugin integration", () => {
           signOnMode: "OPENID_CONNECT",
         }),
       });
-      expect(create.status).toBe(200);
+      expect(create.status).toBe(201);
       const created = await create.json() as Record<string, unknown>;
       const appId = created.id as string;
 
@@ -788,6 +872,7 @@ describe("Okta plugin integration", () => {
         headers: managementHeaders(),
         body: JSON.stringify({ name: "web", label: "Web App", signOnMode: "OPENID_CONNECT" }),
       });
+      expect(createApp.status).toBe(201);
       const appId = (await createApp.json() as Record<string, unknown>).id as string;
       const users = await (await app.request(`${base}/api/v1/users`, { headers: managementHeaders() })).json() as Array<Record<string, unknown>>;
       const userId = users[0].id as string;
@@ -822,6 +907,7 @@ describe("Okta plugin integration", () => {
         headers: managementHeaders(),
         body: JSON.stringify({ name: "deletable", label: "Delete App", signOnMode: "OPENID_CONNECT" }),
       });
+      expect(create.status).toBe(201);
       const appId = (await create.json() as Record<string, unknown>).id as string;
 
       const activeDelete = await app.request(`${base}/api/v1/apps/${appId}`, {
@@ -854,7 +940,7 @@ describe("Okta plugin integration", () => {
           audiences: ["api://two"],
         }),
       });
-      expect(create.status).toBe(200);
+      expect(create.status).toBe(201);
       const created = await create.json() as Record<string, unknown>;
       expect(created.id).toBe("api-2");
 

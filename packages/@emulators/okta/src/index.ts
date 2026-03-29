@@ -87,8 +87,8 @@ export interface OktaSeedConfig {
 
 function ensureMembership(store: ReturnType<typeof getOktaStore>, groupOktaId: string, userOktaId: string): void {
   const existing = store.groupMemberships
-    .all()
-    .find((entry) => entry.group_okta_id === groupOktaId && entry.user_okta_id === userOktaId);
+    .findBy("group_okta_id", groupOktaId)
+    .find((entry) => entry.user_okta_id === userOktaId);
   if (!existing) {
     store.groupMemberships.insert({
       group_okta_id: groupOktaId,
@@ -99,8 +99,8 @@ function ensureMembership(store: ReturnType<typeof getOktaStore>, groupOktaId: s
 
 function ensureAppAssignment(store: ReturnType<typeof getOktaStore>, appOktaId: string, userOktaId: string): void {
   const existing = store.appAssignments
-    .all()
-    .find((entry) => entry.app_okta_id === appOktaId && entry.user_okta_id === userOktaId);
+    .findBy("app_okta_id", appOktaId)
+    .find((entry) => entry.user_okta_id === userOktaId);
   if (!existing) {
     store.appAssignments.insert({
       app_okta_id: appOktaId,

@@ -1,5 +1,5 @@
-import type { RouteContext } from "@emulators/core";
-import { boolFromQuery, generateOktaId, normalizeStatus, nowIso, userDisplayName } from "../helpers.js";
+import { parsePagination, setLinkHeader, type RouteContext } from "@emulators/core";
+import { boolFromQuery, generateOktaId, nowIso, userDisplayName } from "../helpers.js";
 import { findUserByRef, oktaError, readJsonObject, requireManagementAuth, userResponse } from "../route-helpers.js";
 import { getOktaStore } from "../store.js";
 import type { OktaUser, OktaUserStatus } from "../entities.js";
@@ -74,7 +74,14 @@ export function userRoutes({ app, store, baseUrl, tokenMap }: RouteContext): voi
       }
     }
 
-    return c.json(users.map((user) => userResponse(baseUrl, user)));
+    const { page, per_page } = parsePagination(c);
+    const total = users.length;
+    const start = (page - 1) * per_page;
+    const paged = users.slice(start, start + per_page);
+    setLinkHeader(c, total, page, per_page);
+    c.header("X-Total-Count", String(total));
+
+    return c.json(paged.map((user) => userResponse(baseUrl, user)));
   });
 
   app.post("/api/v1/users", async (c) => {
@@ -120,7 +127,23 @@ export function userRoutes({ app, store, baseUrl, tokenMap }: RouteContext): voi
       time_zone: typeof profile.timeZone === "string" ? profile.timeZone : "UTC",
     });
 
-    return c.json(userResponse(baseUrl, created), 200);
+    return c.json(userResponse(baseUrl, created), 201);
+  });
+
+  app.get("/api/v1/users/me", (c) => {
+    const auth = requireManagementAuth(c, tokenMap);
+    if (auth instanceof Response) return auth;
+    const user = oktaStore.users.findOneBy("login", auth.login) ?? oktaStore.users.all()[0];
+    if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
+
+    const response = userResponse(baseUrl, user);
+    return c.json({
+      ...response,
+      profile: {
+        ...(response.profile as Record<string, unknown>),
+        displayName: userDisplayName(user),
+      },
+    });
   });
 
   app.get("/api/v1/users/:userId/groups", (c) => {
@@ -233,6 +256,12 @@ export function userRoutes({ app, store, baseUrl, tokenMap }: RouteContext): voi
     const user = findUserByRef(oktaStore, c.req.param("userId"));
     if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
 
+    // Match Okta behavior: first delete request deactivates, second removes.
+    if (user.status !== "DEPROVISIONED") {
+      oktaStore.users.update(user.id, setLifecycleStatus(user, "DEPROVISIONED"));
+      return new Response(null, { status: 204 });
+    }
+
     for (const membership of oktaStore.groupMemberships.findBy("user_okta_id", user.okta_id)) {
       oktaStore.groupMemberships.delete(membership.id);
     }
@@ -244,27 +273,13 @@ export function userRoutes({ app, store, baseUrl, tokenMap }: RouteContext): voi
     return new Response(null, { status: 204 });
   });
 
-  app.get("/api/v1/users/me", (c) => {
-    const auth = requireManagementAuth(c, tokenMap);
-    if (auth instanceof Response) return auth;
-    const user = oktaStore.users.findOneBy("login", auth.login) ?? oktaStore.users.all()[0];
-    if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
-    return c.json({
-      ...userResponse(baseUrl, user),
-      profile: {
-        ...(userResponse(baseUrl, user).profile as Record<string, unknown>),
-        displayName: userDisplayName(user),
-      },
-    });
-  });
-
   app.post("/api/v1/users/:userId/lifecycle/reactivate", (c) => {
     const auth = requireManagementAuth(c, tokenMap);
     if (auth instanceof Response) return auth;
     const user = findUserByRef(oktaStore, c.req.param("userId"));
     if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
     const updated = oktaStore.users.update(user.id, {
-      status: normalizeStatus("PROVISIONED", user.status),
+      status: "PROVISIONED",
       status_changed_at: nowIso(),
       transitioning_to_status: null,
     });

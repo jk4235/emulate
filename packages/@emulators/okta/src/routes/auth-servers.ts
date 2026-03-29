@@ -1,4 +1,4 @@
-import type { RouteContext } from "@emulators/core";
+import { parsePagination, setLinkHeader, type RouteContext } from "@emulators/core";
 import { DEFAULT_AUDIENCE, generateOktaId, normalizeAuthServerStatus } from "../helpers.js";
 import {
   authorizationServerResponse,
@@ -22,7 +22,15 @@ export function authorizationServerRoutes({ app, store, baseUrl, tokenMap }: Rou
     const auth = requireManagementAuth(c, tokenMap);
     if (auth instanceof Response) return auth;
 
-    return c.json(oktaStore.authorizationServers.all().map((server) => authorizationServerResponse(baseUrl, server)));
+    const servers = oktaStore.authorizationServers.all();
+    const { page, per_page } = parsePagination(c);
+    const total = servers.length;
+    const start = (page - 1) * per_page;
+    const paged = servers.slice(start, start + per_page);
+    setLinkHeader(c, total, page, per_page);
+    c.header("X-Total-Count", String(total));
+
+    return c.json(paged.map((server) => authorizationServerResponse(baseUrl, server)));
   });
 
   app.post("/api/v1/authorizationServers", async (c) => {
@@ -50,7 +58,7 @@ export function authorizationServerRoutes({ app, store, baseUrl, tokenMap }: Rou
       status: normalizeAuthServerStatus(typeof body.status === "string" ? body.status : undefined, "ACTIVE"),
     });
 
-    return c.json(authorizationServerResponse(baseUrl, created), 200);
+    return c.json(authorizationServerResponse(baseUrl, created), 201);
   });
 
   app.post("/api/v1/authorizationServers/:authServerId/lifecycle/activate", (c) => {

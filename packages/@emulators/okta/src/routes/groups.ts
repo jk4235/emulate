@@ -1,4 +1,4 @@
-import type { RouteContext } from "@emulators/core";
+import { parsePagination, setLinkHeader, type RouteContext } from "@emulators/core";
 import { generateOktaId, normalizeGroupType } from "../helpers.js";
 import {
   findGroupByRef,
@@ -25,7 +25,14 @@ export function groupRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
         `${group.name} ${group.description ?? ""}`.toLowerCase().includes(q),
       );
     }
-    return c.json(groups.map((group) => groupResponse(baseUrl, group)));
+    const { page, per_page } = parsePagination(c);
+    const total = groups.length;
+    const start = (page - 1) * per_page;
+    const paged = groups.slice(start, start + per_page);
+    setLinkHeader(c, total, page, per_page);
+    c.header("X-Total-Count", String(total));
+
+    return c.json(paged.map((group) => groupResponse(baseUrl, group)));
   });
 
   app.post("/api/v1/groups", async (c) => {
@@ -51,7 +58,7 @@ export function groupRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
       description: typeof profile.description === "string" ? profile.description : null,
     });
 
-    return c.json(groupResponse(baseUrl, created), 200);
+    return c.json(groupResponse(baseUrl, created), 201);
   });
 
   app.get("/api/v1/groups/:groupId/users", (c) => {
@@ -79,8 +86,8 @@ export function groupRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
     if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
 
     const existing = oktaStore.groupMemberships
-      .all()
-      .find((membership) => membership.group_okta_id === group.okta_id && membership.user_okta_id === user.okta_id);
+      .findBy("group_okta_id", group.okta_id)
+      .find((membership) => membership.user_okta_id === user.okta_id);
     if (!existing) {
       oktaStore.groupMemberships.insert({
         group_okta_id: group.okta_id,
@@ -101,8 +108,8 @@ export function groupRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
     if (!user) return oktaError(c, 404, "E0000007", "Not found: user");
 
     const existing = oktaStore.groupMemberships
-      .all()
-      .find((membership) => membership.group_okta_id === group.okta_id && membership.user_okta_id === user.okta_id);
+      .findBy("group_okta_id", group.okta_id)
+      .find((membership) => membership.user_okta_id === user.okta_id);
     if (existing) {
       oktaStore.groupMemberships.delete(existing.id);
     }

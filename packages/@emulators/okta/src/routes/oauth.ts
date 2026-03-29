@@ -136,15 +136,17 @@ function resolveServer(
 
 function buildOidcConfiguration(baseUrl: string, server: ResolvedServer): Record<string, unknown> {
   const oauthBase = buildOAuthBasePath(server.authServerId);
+  const oauthUrlBase = `${baseUrl}${oauthBase}`;
   return {
     issuer: server.issuer,
-    authorization_endpoint: `${baseUrl}${oauthBase}/authorize`,
-    token_endpoint: `${baseUrl}${oauthBase}/token`,
-    userinfo_endpoint: `${baseUrl}${oauthBase}/userinfo`,
-    jwks_uri: `${baseUrl}${oauthBase}/keys`,
-    end_session_endpoint: `${baseUrl}${oauthBase}/logout`,
-    revocation_endpoint: `${baseUrl}${oauthBase}/revoke`,
-    introspection_endpoint: `${baseUrl}${oauthBase}/introspect`,
+    authorization_endpoint: `${oauthUrlBase}/authorize`,
+    token_endpoint: `${oauthUrlBase}/token`,
+    userinfo_endpoint: `${oauthUrlBase}/userinfo`,
+    jwks_uri: `${oauthUrlBase}/keys`,
+    end_session_endpoint: `${oauthUrlBase}/logout`,
+    revocation_endpoint: `${oauthUrlBase}/revoke`,
+    introspection_endpoint: `${oauthUrlBase}/introspect`,
+    registration_endpoint: `${oauthUrlBase}/clients`,
     response_types_supported: ["code"],
     response_modes_supported: ["query", "fragment", "form_post"],
     grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
@@ -152,6 +154,12 @@ function buildOidcConfiguration(baseUrl: string, server: ResolvedServer): Record
     id_token_signing_alg_values_supported: ["RS256"],
     scopes_supported: ["openid", "profile", "email", "offline_access", "groups"],
     token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+    revocation_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+    introspection_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+    request_parameter_supported: false,
+    request_uri_parameter_supported: false,
+    claims_parameter_supported: false,
+    request_object_signing_alg_values_supported: ["RS256"],
     claims_supported: [
       "sub",
       "iss",
